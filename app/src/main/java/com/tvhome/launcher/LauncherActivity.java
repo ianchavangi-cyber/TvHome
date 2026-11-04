@@ -63,6 +63,8 @@ public class LauncherActivity extends Activity {
     private SharedPreferences prefs;
 
     private final List<AppEntry> apps = new ArrayList<>();
+    private final List<AppEntry> dockApps = new ArrayList<>();
+    private final List<AppEntry> libraryApps = new ArrayList<>();
     private FrameLayout root;
     private RecyclerView grid;
     private TileAdapter adapter;
@@ -70,6 +72,7 @@ public class LauncherActivity extends Activity {
     private TextView bigName, greeting, wifiPill;
     private final TextView[] pills = new TextView[3];
     private PopupWindow popup;
+    private PopupWindow managePopup;
     private int lastPos = 0, pendingFocus = -1;
     private GradientDrawable glowDrawable;
 
@@ -130,21 +133,110 @@ public class LauncherActivity extends Activity {
             e.color = sampleColor(e.banner);
             map.put(p, e);
         }
-        List<AppEntry> ordered = new ArrayList<>();
-        for (String p : getResources().getStringArray(R.array.dock_apps)) {
-            AppEntry e = map.remove(p);
-            if (e != null) ordered.add(e);
+        dockApps.clear();
+        String savedDock = prefs.getString("pinned_dock_packages", null);
+        String[] dockPkgList;
+        if (savedDock != null) {
+            dockPkgList = savedDock.split(",");
+        } else {
+            dockPkgList = getResources().getStringArray(R.array.dock_apps);
         }
-        List<AppEntry> rest = new ArrayList<>(map.values());
-        Collections.sort(rest, new Comparator<AppEntry>() {
+
+        List<String> validPinnedPkgs = new ArrayList<>();
+        for (String p : dockPkgList) {
+            p = p.trim();
+            if (p.isEmpty()) continue;
+            AppEntry e = map.remove(p);
+            if (e != null) {
+                dockApps.add(e);
+                validPinnedPkgs.add(p);
+            }
+        }
+
+        // If there were stale entries removed from a saved list, persist clean state
+        if (savedDock != null && validPinnedPkgs.size() != dockPkgList.length) {
+            persistPinnedPackages(validPinnedPkgs);
+        }
+
+        libraryApps.clear();
+        libraryApps.addAll(map.values());
+        Collections.sort(libraryApps, new Comparator<AppEntry>() {
             @Override
             public int compare(AppEntry a, AppEntry c) {
                 return a.label.compareToIgnoreCase(c.label);
             }
         });
-        ordered.addAll(rest);
+
         apps.clear();
-        apps.addAll(ordered);
+        apps.addAll(dockApps);
+        apps.addAll(libraryApps);
+    }
+
+    private void persistPinnedPackages(List<String> pkgs) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < pkgs.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append(pkgs.get(i));
+        }
+        prefs.edit().putString("pinned_dock_packages", sb.toString()).apply();
+    }
+
+    private void savePinnedApps() {
+        List<String> pkgs = new ArrayList<>();
+        for (AppEntry e : dockApps) {
+            pkgs.add(e.pkg);
+        }
+        persistPinnedPackages(pkgs);
+    }
+
+    private void updateAndPreserveFocus(String targetPkg) {
+        apps.clear();
+        apps.addAll(dockApps);
+        apps.addAll(libraryApps);
+        adapter.notifyDataSetChanged();
+        savePinnedApps();
+
+        int targetIndex = 0;
+        for (int i = 0; i < apps.size(); i++) {
+            if (apps.get(i).pkg.equals(targetPkg)) {
+                targetIndex = i;
+                break;
+            }
+        }
+        final int finalTarget = targetIndex;
+        grid.post(new Runnable() {
+            @Override
+            public void run() {
+                focusPos(finalTarget);
+            }
+        });
+    }
+
+    private void swapDockApps(int i1, int i2) {
+        if (i1 < 0 || i1 >= dockApps.size() || i2 < 0 || i2 >= dockApps.size()) return;
+        AppEntry e1 = dockApps.get(i1);
+        AppEntry e2 = dockApps.get(i2);
+        dockApps.set(i1, e2);
+        dockApps.set(i2, e1);
+        updateAndPreserveFocus(e1.pkg);
+    }
+
+    private void unpinApp(AppEntry entry) {
+        if (!dockApps.remove(entry)) return;
+        libraryApps.add(entry);
+        Collections.sort(libraryApps, new Comparator<AppEntry>() {
+            @Override
+            public int compare(AppEntry a, AppEntry c) {
+                return a.label.compareToIgnoreCase(c.label);
+            }
+        });
+        updateAndPreserveFocus(entry.pkg);
+    }
+
+    private void pinApp(AppEntry entry) {
+        if (!libraryApps.remove(entry)) return;
+        dockApps.add(entry);
+        updateAndPreserveFocus(entry.pkg);
     }
 
     /** Average colour of a banner, brightened so the glow is visible on black. */
@@ -224,12 +316,12 @@ public class LauncherActivity extends Activity {
         // glass highlight
         glass = new View(this);
         GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(px(16));
-        gd.setColor(0x33FFFFFF);
-        gd.setStroke(px(2), 0x66FFFFFF);
+        gd.setCornerRadius(px(18));
+        gd.setColor(getColor(R.color.glass_frame_fill));
+        gd.setStroke(px(2), getColor(R.color.glass_frame_stroke_inner));
         glass.setBackground(gd);
-        int gw = (int) (imgW * 1.07f) + px(12);
-        int gh = (int) (imgH * 1.07f) + px(12);
+        int gw = (int) (imgW * 1.10f) + px(12);
+        int gh = (int) (imgH * 1.10f) + px(12);
         glass.setLayoutParams(new FrameLayout.LayoutParams(gw, gh));
         glass.setAlpha(0f);
         root.addView(glass);
@@ -451,7 +543,113 @@ public class LauncherActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (managePopup != null && managePopup.isShowing()) {
+            managePopup.dismiss();
+            managePopup = null;
+            return;
+        }
+        if (popup != null && popup.isShowing()) {
+            popup.dismiss();
+            popup = null;
+            return;
+        }
         // A launcher never exits on Back
+    }
+
+    private void showAppManagementDialog(final AppEntry entry, final int pos, final boolean isDock, View anchor) {
+        if (managePopup != null && managePopup.isShowing()) {
+            managePopup.dismiss();
+        }
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(px(10), px(10), px(10), px(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(px(20));
+        bg.setColor(0xF01A1D24);
+        bg.setStroke(px(1), getColor(R.color.dock_band_stroke));
+        box.setBackground(bg);
+
+        TextView title = new TextView(this);
+        style(title, 15, 600, Color.WHITE);
+        title.setText(entry.label);
+        title.setPadding(px(20), px(8), px(20), px(10));
+        box.addView(title);
+
+        List<TextView> actionButtons = new ArrayList<>();
+
+        if (isDock) {
+            if (pos > 0) {
+                TextView btnLeft = createActionButton("Move Left", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        managePopup.dismiss();
+                        swapDockApps(pos, pos - 1);
+                    }
+                });
+                actionButtons.add(btnLeft);
+                box.addView(btnLeft);
+            }
+            if (pos < dockApps.size() - 1) {
+                TextView btnRight = createActionButton("Move Right", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        managePopup.dismiss();
+                        swapDockApps(pos, pos + 1);
+                    }
+                });
+                actionButtons.add(btnRight);
+                box.addView(btnRight);
+            }
+            TextView btnUnpin = createActionButton("Unpin from Dock", new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    managePopup.dismiss();
+                    unpinApp(entry);
+                }
+            });
+            actionButtons.add(btnUnpin);
+            box.addView(btnUnpin);
+        } else {
+            TextView btnPin = createActionButton("Pin to Dock", new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    managePopup.dismiss();
+                    pinApp(entry);
+                }
+            });
+            actionButtons.add(btnPin);
+            box.addView(btnPin);
+        }
+
+        managePopup = new PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        managePopup.setBackgroundDrawable(null);
+        managePopup.showAsDropDown(anchor, 0, -px(30));
+        if (!actionButtons.isEmpty()) {
+            actionButtons.get(0).requestFocus();
+        }
+    }
+
+    private TextView createActionButton(String text, View.OnClickListener onClickListener) {
+        TextView t = new TextView(this);
+        style(t, 15, 400, Color.WHITE);
+        t.setText(text);
+        t.setPadding(px(20), px(8), px(30), px(8));
+        t.setFocusable(true);
+        t.setClickable(true);
+        t.setBackgroundColor(Color.TRANSPARENT);
+        t.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean has) {
+                GradientDrawable g = new GradientDrawable();
+                g.setCornerRadius(px(12));
+                g.setColor(has ? getColor(R.color.pill_focus_bg) : Color.TRANSPARENT);
+                if (has) g.setStroke(px(1), getColor(R.color.pill_stroke_focus));
+                v.setBackground(g);
+            }
+        });
+        t.setOnClickListener(onClickListener);
+        return t;
     }
 
     private boolean pillHasFocus() {
@@ -501,11 +699,18 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    private int focusedTilePos = -1;
+
     private void onTileFocused(int pos, TileHolder h) {
         lastPos = pos;
+        focusedTilePos = pos;
         prefs.edit().putInt("last", pos).apply();
         AppEntry e = apps.get(pos);
-        if (pos < cols) {
+
+        // Magnify neighbouring tiles in the dock
+        animateDockNeighbours(pos);
+
+        if (pos < dockApps.size()) {
             int off = grid.computeVerticalScrollOffset();
             if (off > 0) grid.smoothScrollBy(0, -off);
             bigName.setText(e.label);
@@ -524,6 +729,27 @@ public class LauncherActivity extends Activity {
             hideAmbient();
         }
         placeGlass(h.itemView, true);
+    }
+
+    private void animateDockNeighbours(int focusedPos) {
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View child = grid.getChildAt(i);
+            int childPos = grid.getChildAdapterPosition(child);
+            if (childPos < 0) continue;
+            TileHolder holder = (TileHolder) grid.getChildViewHolder(child);
+            if (holder == null) continue;
+
+            if (childPos == focusedPos) {
+                holder.img.animate().scaleX(1.10f).scaleY(1.10f).setDuration(180)
+                        .setInterpolator(new DecelerateInterpolator()).start();
+            } else if (focusedPos < dockApps.size() && (childPos == focusedPos - 1 || childPos == focusedPos + 1) && childPos < dockApps.size()) {
+                holder.img.animate().scaleX(1.03f).scaleY(1.03f).setDuration(180)
+                        .setInterpolator(new DecelerateInterpolator()).start();
+            } else {
+                holder.img.animate().scaleX(1.00f).scaleY(1.00f).setDuration(180)
+                        .setInterpolator(new DecelerateInterpolator()).start();
+            }
+        }
     }
 
     private void hideAmbient() {
@@ -566,28 +792,41 @@ public class LauncherActivity extends Activity {
     private class DockBand extends RecyclerView.ItemDecoration {
         private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint sheenPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         DockBand() {
             fillPaint.setColor(getColor(R.color.dock_band_bg));
             strokePaint.setStyle(Paint.Style.STROKE);
-            strokePaint.setStrokeWidth(px(1));
+            strokePaint.setStrokeWidth(px(1.5f));
             strokePaint.setColor(getColor(R.color.dock_band_stroke));
+            sheenPaint.setStyle(Paint.Style.STROKE);
+            sheenPaint.setStrokeWidth(px(1));
+            sheenPaint.setColor(getColor(R.color.dock_sheen));
         }
 
         @Override
         public void onDraw(Canvas c, RecyclerView parent, RecyclerView.State state) {
+            if (dockApps.isEmpty()) return;
             int top = Integer.MAX_VALUE, bottom = Integer.MIN_VALUE;
+            int left = Integer.MAX_VALUE, right = Integer.MIN_VALUE;
+
             for (int i = 0; i < parent.getChildCount(); i++) {
                 View v = parent.getChildAt(i);
-                if (parent.getChildAdapterPosition(v) < cols) {
+                int pos = parent.getChildAdapterPosition(v);
+                if (pos >= 0 && pos < dockApps.size()) {
                     top = Math.min(top, v.getTop());
                     bottom = Math.max(bottom, v.getBottom());
+                    left = Math.min(left, v.getLeft());
+                    right = Math.max(right, v.getRight());
                 }
             }
-            if (top == Integer.MAX_VALUE) return;
-            RectF r = new RectF(margin - px(12), top - px(6), W - margin + px(12), bottom + px(2));
-            c.drawRoundRect(r, px(28), px(28), fillPaint);
-            c.drawRoundRect(r, px(28), px(28), strokePaint);
+            if (top == Integer.MAX_VALUE || left == Integer.MAX_VALUE) return;
+
+            RectF r = new RectF(left - px(10), top - px(6), right + px(10), bottom + px(2));
+            c.drawRoundRect(r, px(26), px(26), fillPaint);
+            c.drawRoundRect(r, px(26), px(26), strokePaint);
+            // subtle specular line along the top inner curve
+            c.drawLine(r.left + px(26), r.top + px(1), r.right - px(26), r.top + px(1), sheenPaint);
         }
     }
 
@@ -635,21 +874,32 @@ public class LauncherActivity extends Activity {
                 public void onFocusChange(View v, boolean has) {
                     int pos = h.getBindingAdapterPosition();
                     if (pos < 0) return;
-                    h.img.animate().scaleX(has ? 1.07f : 1f).scaleY(has ? 1.07f : 1f).setDuration(160).start();
-                    h.label.setVisibility(has ? View.VISIBLE : View.INVISIBLE);
+                    h.label.setVisibility((has && pos >= dockApps.size()) ? View.VISIBLE : View.INVISIBLE);
                     if (has) onTileFocused(pos, h);
-                    else if (!grid.hasFocus() && !pillHasFocus()) glass.animate().alpha(0f).setDuration(120).start();
+                    else if (!grid.hasFocus() && !pillHasFocus()) {
+                        glass.animate().alpha(0f).setDuration(120).start();
+                        animateDockNeighbours(-1);
+                    }
                 }
             });
             tile.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     int pos = h.getBindingAdapterPosition();
-                    if (pos < 0) return;
+                    if (pos < 0 || pos >= apps.size()) return;
                     try {
                         startActivity(apps.get(pos).intent);
                     } catch (Exception ignored) {
                     }
+                }
+            });
+            tile.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    int pos = h.getBindingAdapterPosition();
+                    if (pos < 0 || pos >= apps.size()) return false;
+                    showAppManagementDialog(apps.get(pos), pos, pos < dockApps.size(), v);
+                    return true;
                 }
             });
             tile.setOnKeyListener(new View.OnKeyListener() {
@@ -658,6 +908,12 @@ public class LauncherActivity extends Activity {
                     if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
                     int pos = h.getBindingAdapterPosition();
                     int n = apps.size();
+                    if (code == KeyEvent.KEYCODE_MENU) {
+                        if (pos >= 0 && pos < n) {
+                            showAppManagementDialog(apps.get(pos), pos, pos < dockApps.size(), v);
+                            return true;
+                        }
+                    }
                     switch (code) {
                         case KeyEvent.KEYCODE_DPAD_LEFT:
                             if (pos % cols != 0) focusPos(pos - 1);
@@ -685,13 +941,23 @@ public class LauncherActivity extends Activity {
         public void onBindViewHolder(TileHolder h, int pos) {
             AppEntry e = apps.get(pos);
             h.img.setImageDrawable(e.banner);
+            h.img.setScaleX(1f);
+            h.img.setScaleY(1f);
             if (e.isIcon) {
                 h.img.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                h.img.setBackgroundColor(0xFF1E1E20);
-                h.img.setPadding(px(30), px(10), px(30), px(10));
+                GradientDrawable cardBg = new GradientDrawable();
+                cardBg.setCornerRadius(px(16));
+                cardBg.setColor(getColor(R.color.card_icon_bg));
+                cardBg.setStroke(px(1), getColor(R.color.card_icon_stroke));
+                h.img.setBackground(cardBg);
+                h.img.setPadding(px(26), px(12), px(26), px(12));
             } else {
                 h.img.setScaleType(ImageView.ScaleType.FIT_XY);
-                h.img.setBackgroundColor(Color.TRANSPARENT);
+                GradientDrawable bannerBg = new GradientDrawable();
+                bannerBg.setCornerRadius(px(14));
+                bannerBg.setColor(Color.TRANSPARENT);
+                h.img.setBackground(bannerBg);
+                h.img.setClipToOutline(true);
                 h.img.setPadding(0, 0, 0, 0);
             }
             h.label.setText(e.label);

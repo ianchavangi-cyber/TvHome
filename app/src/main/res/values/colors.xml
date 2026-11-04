@@ -4,6 +4,7 @@
     <color name="bg_dark_gradient_bottom">#030407</color>
     <color name="dock_band_bg">#1A1D24</color>
     <color name="dock_band_stroke">#26FFFFFF</color>
+    <color name="dock_sheen">#4DFFFFFF</color>
     <color name="pill_normal_bg">#1EFFFFFF</color>
     <color name="pill_focus_bg">#4DFFFFFF</color>
     <color name="pill_stroke_normal">#14FFFFFF</color>
@@ -11,4 +12,9 @@
     <color name="text_primary">#FFFFFF</color>
     <color name="text_secondary">#B3FFFFFF</color>
     <color name="text_subtle">#80FFFFFF</color>
+    <color name="glass_frame_fill">#24FFFFFF</color>
+    <color name="glass_frame_stroke_outer">#33FFFFFF</color>
+    <color name="glass_frame_stroke_inner">#88FFFFFF</color>
+    <color name="card_icon_bg">#242832</color>
+    <color name="card_icon_stroke">#26FFFFFF</color>
 </resources>
