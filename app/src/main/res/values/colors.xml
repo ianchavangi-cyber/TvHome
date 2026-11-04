@@ -7,7 +7,7 @@
     <color name="pill_normal_bg">#1EFFFFFF</color>
     <color name="pill_focus_bg">#4DFFFFFF</color>
     <color name="pill_stroke_normal">#14FFFFFF</color>
-    <color name="pill_stroke_focus">#66FFFFFF</color>
+    <color name="pill_stroke_focus">#88FFFFFF</color>
     <color name="text_primary">#FFFFFF</color>
     <color name="text_secondary">#B3FFFFFF</color>
     <color name="text_subtle">#80FFFFFF</color>

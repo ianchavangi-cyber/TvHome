@@ -182,7 +182,7 @@ public class LauncherActivity extends Activity {
         root = new FrameLayout(this);
         GradientDrawable bg = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xFF0B0E14, 0xFF030407}
+                new int[]{getColor(R.color.bg_dark_gradient_top), getColor(R.color.bg_dark_gradient_bottom)}
         );
         root.setBackground(bg);
         setContentView(root);
@@ -331,11 +331,10 @@ public class LauncherActivity extends Activity {
     private void setPillBg(TextView p, boolean focused) {
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(px(22));
-        g.setColor(focused ? 0x4DFFFFFF : 0x1EFFFFFF);
-        g.setStroke(focused ? px(2) : px(1), focused ? 0x88FFFFFF : 0x14FFFFFF);
+        g.setColor(getColor(focused ? R.color.pill_focus_bg : R.color.pill_normal_bg));
+        g.setStroke(focused ? px(2) : px(1), getColor(focused ? R.color.pill_stroke_focus : R.color.pill_stroke_normal));
         p.setBackground(g);
-        p.setScaleX(focused ? 1.08f : 1f);
-        p.setScaleY(focused ? 1.08f : 1f);
+        p.animate().scaleX(focused ? 1.08f : 1f).scaleY(focused ? 1.08f : 1f).setDuration(160).start();
     }
 
     // --------------------------------------------------------------- pills
@@ -569,10 +568,10 @@ public class LauncherActivity extends Activity {
         private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         DockBand() {
-            fillPaint.setColor(0xFF1A1D24);
+            fillPaint.setColor(getColor(R.color.dock_band_bg));
             strokePaint.setStyle(Paint.Style.STROKE);
             strokePaint.setStrokeWidth(px(1));
-            strokePaint.setColor(0x26FFFFFF);
+            strokePaint.setColor(getColor(R.color.dock_band_stroke));
         }
 
         @Override
