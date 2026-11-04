@@ -29,6 +29,10 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -65,6 +69,9 @@ public class LauncherActivity extends Activity {
     private final List<AppEntry> apps = new ArrayList<>();
     private final List<AppEntry> dockApps = new ArrayList<>();
     private final List<AppEntry> libraryApps = new ArrayList<>();
+    private final List<AppEntry> displayedLibraryApps = new ArrayList<>();
+    private final Map<String, AppEntry> allAppsMap = new LinkedHashMap<>();
+    private int selectedCategory = 0; // 0: All, 1: Recents, 2: Media, 3: Music, 4: Tools
     private FrameLayout root;
     private RecyclerView grid;
     private TileAdapter adapter;
@@ -73,6 +80,11 @@ public class LauncherActivity extends Activity {
     private final TextView[] pills = new TextView[3];
     private PopupWindow popup;
     private PopupWindow managePopup;
+    private FrameLayout searchOverlay;
+    private EditText searchInput;
+    private RecyclerView searchResultsList;
+    private SearchResultAdapter searchAdapter;
+    private final List<AppEntry> searchResults = new ArrayList<>();
     private int lastPos = 0, pendingFocus = -1;
     private GradientDrawable glowDrawable;
 
@@ -158,6 +170,12 @@ public class LauncherActivity extends Activity {
             persistPinnedPackages(validPinnedPkgs);
         }
 
+        allAppsMap.clear();
+        for (AppEntry de : dockApps) {
+            allAppsMap.put(de.pkg, de);
+        }
+        allAppsMap.putAll(map);
+
         libraryApps.clear();
         libraryApps.addAll(map.values());
         Collections.sort(libraryApps, new Comparator<AppEntry>() {
@@ -167,9 +185,102 @@ public class LauncherActivity extends Activity {
             }
         });
 
+        filterLibraryAppsByCategory(selectedCategory);
+    }
+
+    private void filterLibraryAppsByCategory(int catIndex) {
+        selectedCategory = catIndex;
+        displayedLibraryApps.clear();
+        if (catIndex == 0) {
+            displayedLibraryApps.addAll(libraryApps);
+        } else if (catIndex == 1) {
+            displayedLibraryApps.addAll(getRecentApps());
+        } else {
+            for (AppEntry e : libraryApps) {
+                if (matchesCategory(e, catIndex)) {
+                    displayedLibraryApps.add(e);
+                }
+            }
+        }
+        rebuildUnifiedAppList();
+    }
+
+    private boolean matchesCategory(AppEntry e, int catIndex) {
+        String p = e.pkg.toLowerCase();
+        String l = e.label.toLowerCase();
+        if (catIndex == 2) {
+            // Media & Video
+            return p.contains("video") || p.contains("movie") || p.contains("tv") || p.contains("cinema")
+                    || p.contains("youtube") || p.contains("netflix") || p.contains("cricfy") || p.contains("stream")
+                    || p.contains("player") || p.contains("plex") || p.contains("kodi") || p.contains("disney")
+                    || p.contains("hulu") || p.contains("prime") || p.contains("vlc") || p.contains("mx")
+                    || l.contains("video") || l.contains("movie") || l.contains("tv") || l.contains("cinema")
+                    || l.contains("youtube") || l.contains("netflix") || l.contains("stream") || l.contains("player");
+        } else if (catIndex == 3) {
+            // Music & Audio
+            return p.contains("music") || p.contains("audio") || p.contains("sound") || p.contains("spotify")
+                    || p.contains("radio") || p.contains("podcast") || p.contains("tidal") || p.contains("deezer")
+                    || l.contains("music") || l.contains("audio") || l.contains("spotify") || l.contains("radio");
+        } else if (catIndex == 4) {
+            // Tools & Settings
+            return p.contains("tool") || p.contains("setting") || p.contains("file") || p.contains("browser")
+                    || p.contains("manager") || p.contains("cleaner") || p.contains("speed") || p.contains("system")
+                    || p.contains("wifi") || p.contains("network") || p.contains("explorer") || p.contains("terminal")
+                    || l.contains("setting") || l.contains("file") || l.contains("tool") || l.contains("browser");
+        }
+        return false;
+    }
+
+    private void recordAppLaunch(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return;
+        String raw = prefs.getString("recent_packages", "");
+        List<String> list = new ArrayList<>();
+        list.add(pkg);
+        if (!raw.isEmpty()) {
+            for (String p : raw.split(",")) {
+                p = p.trim();
+                if (!p.isEmpty() && !p.equals(pkg) && list.size() < 10) {
+                    list.add(p);
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append(list.get(i));
+        }
+        prefs.edit().putString("recent_packages", sb.toString()).apply();
+    }
+
+    private List<AppEntry> getRecentApps() {
+        List<AppEntry> result = new ArrayList<>();
+        String raw = prefs.getString("recent_packages", "");
+        if (raw.isEmpty()) return result;
+        List<String> validPkgs = new ArrayList<>();
+        for (String p : raw.split(",")) {
+            p = p.trim();
+            if (p.isEmpty()) continue;
+            AppEntry e = allAppsMap.get(p);
+            if (e != null) {
+                result.add(e);
+                validPkgs.add(p);
+            }
+        }
+        if (validPkgs.size() != raw.split(",").length) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < validPkgs.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(validPkgs.get(i));
+            }
+            prefs.edit().putString("recent_packages", sb.toString()).apply();
+        }
+        return result;
+    }
+
+    private void rebuildUnifiedAppList() {
         apps.clear();
         apps.addAll(dockApps);
-        apps.addAll(libraryApps);
+        apps.addAll(displayedLibraryApps);
     }
 
     private void persistPinnedPackages(List<String> pkgs) {
@@ -190,20 +301,29 @@ public class LauncherActivity extends Activity {
     }
 
     private void updateAndPreserveFocus(String targetPkg) {
-        apps.clear();
-        apps.addAll(dockApps);
-        apps.addAll(libraryApps);
+        filterLibraryAppsByCategory(selectedCategory);
         adapter.notifyDataSetChanged();
         savePinnedApps();
 
-        int targetIndex = 0;
-        for (int i = 0; i < apps.size(); i++) {
-            if (apps.get(i).pkg.equals(targetPkg)) {
-                targetIndex = i;
+        int targetAdapterPos = 0;
+        // Search in dock
+        for (int i = 0; i < dockApps.size(); i++) {
+            if (dockApps.get(i).pkg.equals(targetPkg)) {
+                targetAdapterPos = i;
                 break;
             }
         }
-        final int finalTarget = targetIndex;
+        // If not in dock, search in displayedLibraryApps
+        if (targetAdapterPos == 0 && (dockApps.isEmpty() || !dockApps.get(0).pkg.equals(targetPkg))) {
+            for (int j = 0; j < displayedLibraryApps.size(); j++) {
+                if (displayedLibraryApps.get(j).pkg.equals(targetPkg)) {
+                    targetAdapterPos = dockApps.size() + 1 + j;
+                    break;
+                }
+            }
+        }
+
+        final int finalTarget = targetAdapterPos;
         grid.post(new Runnable() {
             @Override
             public void run() {
@@ -291,9 +411,18 @@ public class LauncherActivity extends Activity {
         glow.setAlpha(0f);
         root.addView(glow);
 
-        // grid (first row = dock)
+        // grid (first row = dock, position dockApps.size() = category bar, rest = library)
         grid = new RecyclerView(this);
-        GridLayoutManager lm = new GridLayoutManager(this, cols);
+        final GridLayoutManager lm = new GridLayoutManager(this, cols);
+        lm.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+            @Override
+            public int getSpanSize(int position) {
+                if (position == dockApps.size()) {
+                    return cols; // Category Bar occupies the full grid width
+                }
+                return 1;
+            }
+        });
         grid.setLayoutManager(lm);
         adapter = new TileAdapter();
         grid.setAdapter(adapter);
@@ -306,7 +435,9 @@ public class LauncherActivity extends Activity {
             @Override
             public void onScrolled(RecyclerView rv, int dx, int dy) {
                 View f = rv.getFocusedChild();
-                if (f != null) placeGlass(f, false);
+                if (f != null && rv.getChildViewHolder(f) instanceof TileHolder) {
+                    placeGlass(f, false);
+                }
                 updateAmbient();
                 tryPendingFocus();
             }
@@ -543,6 +674,10 @@ public class LauncherActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (searchOverlay != null && searchOverlay.getVisibility() == View.VISIBLE) {
+            closeSearchModal();
+            return;
+        }
         if (managePopup != null && managePopup.isShowing()) {
             managePopup.dismiss();
             managePopup = null;
@@ -554,6 +689,238 @@ public class LauncherActivity extends Activity {
             return;
         }
         // A launcher never exits on Back
+    }
+
+    private void openSearchModal() {
+        if (searchOverlay == null) {
+            buildSearchOverlay();
+        }
+        searchResults.clear();
+        searchResults.addAll(allAppsMap.values());
+        searchAdapter.notifyDataSetChanged();
+        if (searchInput != null) {
+            searchInput.setText("");
+        }
+        searchOverlay.setVisibility(View.VISIBLE);
+        searchOverlay.animate().alpha(1f).setDuration(200).start();
+        if (searchInput != null) {
+            searchInput.requestFocus();
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT);
+        }
+    }
+
+    private void closeSearchModal() {
+        if (searchOverlay == null || searchOverlay.getVisibility() != View.VISIBLE) return;
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null && searchInput != null) {
+            imm.hideSoftInputFromWindow(searchInput.getWindowToken(), 0);
+        }
+        searchOverlay.animate().alpha(0f).setDuration(160).withEndAction(new Runnable() {
+            @Override
+            public void run() {
+                searchOverlay.setVisibility(View.GONE);
+                focusCategoryBar();
+            }
+        }).start();
+    }
+
+    private void buildSearchOverlay() {
+        searchOverlay = new FrameLayout(this);
+        searchOverlay.setBackgroundColor(getColor(R.color.search_overlay_bg));
+        searchOverlay.setAlpha(0f);
+        searchOverlay.setFocusable(true);
+        searchOverlay.setClickable(true);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams((int) (W * 0.76f), -1, Gravity.CENTER_HORIZONTAL);
+        clp.topMargin = px(36);
+        clp.bottomMargin = px(36);
+        content.setLayoutParams(clp);
+
+        // Header: Search Title & Input box
+        TextView header = new TextView(this);
+        style(header, 26, 600, Color.WHITE);
+        header.setText("Search Applications");
+        content.addView(header);
+
+        searchInput = new EditText(this);
+        searchInput.setTypeface(outfit);
+        searchInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        searchInput.setTextColor(Color.WHITE);
+        searchInput.setHint("Type app name to filter...");
+        searchInput.setHintTextColor(0x66FFFFFF);
+        searchInput.setSingleLine(true);
+        searchInput.setPadding(px(20), px(14), px(20), px(14));
+        GradientDrawable inputBg = new GradientDrawable();
+        inputBg.setCornerRadius(px(16));
+        inputBg.setColor(getColor(R.color.search_input_bg));
+        inputBg.setStroke(px(1.5f), getColor(R.color.search_input_stroke));
+        searchInput.setBackground(inputBg);
+
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(-1, -2);
+        ilp.topMargin = px(16);
+        ilp.bottomMargin = px(18);
+        searchInput.setLayoutParams(ilp);
+
+        searchInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                filterSearch(s.toString());
+            }
+            @Override
+            public void afterTextChanged(Editable s) {}
+        });
+
+        searchInput.setOnKeyListener(new View.OnKeyListener() {
+            @Override
+            public boolean onKey(View v, int keyCode, KeyEvent event) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        if (!searchResults.isEmpty() && searchResultsList != null) {
+                            searchResultsList.requestFocus();
+                            return true;
+                        }
+                    } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+                        closeSearchModal();
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
+        content.addView(searchInput);
+
+        // Results Grid using cols
+        searchResultsList = new RecyclerView(this);
+        GridLayoutManager slm = new GridLayoutManager(this, cols);
+        searchResultsList.setLayoutManager(slm);
+        searchAdapter = new SearchResultAdapter();
+        searchResultsList.setAdapter(searchAdapter);
+        searchResultsList.setClipToPadding(false);
+        searchResultsList.setPadding(0, px(8), 0, px(20));
+        content.addView(searchResultsList, new LinearLayout.LayoutParams(-1, -1));
+
+        searchOverlay.addView(content);
+        root.addView(searchOverlay, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private void filterSearch(String q) {
+        searchResults.clear();
+        String query = q.trim().toLowerCase();
+        for (AppEntry e : allAppsMap.values()) {
+            if (query.isEmpty() || e.label.toLowerCase().contains(query) || e.pkg.toLowerCase().contains(query)) {
+                searchResults.add(e);
+            }
+        }
+        searchAdapter.notifyDataSetChanged();
+    }
+
+    private class SearchResultAdapter extends RecyclerView.Adapter<TileHolder> {
+        @Override
+        public TileHolder onCreateViewHolder(ViewGroup parent, int type) {
+            LinearLayout tile = new LinearLayout(LauncherActivity.this);
+            tile.setOrientation(LinearLayout.VERTICAL);
+            tile.setGravity(Gravity.CENTER_HORIZONTAL);
+            int sTileW = (int) ((W * 0.76f) / cols) - px(8);
+            int sImgW = sTileW - px(8);
+            int sImgH = sImgW * 9 / 16;
+            tile.setLayoutParams(new RecyclerView.LayoutParams(sTileW, sImgH + px(40)));
+            tile.setPadding(px(4), px(4), px(4), 0);
+            tile.setFocusable(true);
+            tile.setClickable(true);
+
+            ImageView img = new ImageView(LauncherActivity.this);
+            img.setLayoutParams(new LinearLayout.LayoutParams(sImgW, sImgH));
+            tile.addView(img);
+
+            TextView label = new TextView(LauncherActivity.this);
+            style(label, 13, 400, Color.WHITE);
+            label.setGravity(Gravity.CENTER);
+            label.setSingleLine(true);
+            LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(sImgW, px(22));
+            llp.topMargin = px(4);
+            label.setLayoutParams(llp);
+            tile.addView(label);
+
+            final TileHolder h = new TileHolder(tile, img, label);
+            tile.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override
+                public void onFocusChange(View v, boolean has) {
+                    GradientDrawable bg = new GradientDrawable();
+                    bg.setCornerRadius(px(14));
+                    bg.setColor(has ? getColor(R.color.pill_focus_bg) : Color.TRANSPARENT);
+                    if (has) bg.setStroke(px(2), getColor(R.color.pill_stroke_focus));
+                    v.setBackground(bg);
+                    v.animate().scaleX(has ? 1.05f : 1f).scaleY(has ? 1.05f : 1f).setDuration(150).start();
+                }
+            });
+            tile.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    int pos = h.getBindingAdapterPosition();
+                    if (pos >= 0 && pos < searchResults.size()) {
+                        AppEntry e = searchResults.get(pos);
+                        recordAppLaunch(e.pkg);
+                        closeSearchModal();
+                        try {
+                            startActivity(e.intent);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
+            tile.setOnKeyListener(new View.OnKeyListener() {
+                @Override
+                public boolean onKey(View v, int keyCode, KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        int pos = h.getBindingAdapterPosition();
+                        if (keyCode == KeyEvent.KEYCODE_DPAD_UP && pos < cols) {
+                            if (searchInput != null) {
+                                searchInput.requestFocus();
+                                return true;
+                            }
+                        } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+                            closeSearchModal();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+            return h;
+        }
+
+        @Override
+        public void onBindViewHolder(TileHolder h, int pos) {
+            AppEntry e = searchResults.get(pos);
+            h.img.setImageDrawable(e.banner);
+            if (e.isIcon) {
+                h.img.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                GradientDrawable cardBg = new GradientDrawable();
+                cardBg.setCornerRadius(px(14));
+                cardBg.setColor(getColor(R.color.card_icon_bg));
+                cardBg.setStroke(px(1), getColor(R.color.card_icon_stroke));
+                h.img.setBackground(cardBg);
+                h.img.setPadding(px(18), px(8), px(18), px(8));
+            } else {
+                h.img.setScaleType(ImageView.ScaleType.FIT_XY);
+                GradientDrawable bannerBg = new GradientDrawable();
+                bannerBg.setCornerRadius(px(12));
+                bannerBg.setColor(Color.TRANSPARENT);
+                h.img.setBackground(bannerBg);
+                h.img.setClipToOutline(true);
+                h.img.setPadding(0, 0, 0, 0);
+            }
+            h.label.setText(e.label);
+        }
+
+        @Override
+        public int getItemCount() {
+            return searchResults.size();
+        }
     }
 
     private void showAppManagementDialog(final AppEntry entry, final int pos, final boolean isDock, View anchor) {
@@ -674,7 +1041,8 @@ public class LauncherActivity extends Activity {
     // ------------------------------------------------------ focus / ambient
 
     private void focusPos(int p) {
-        if (p < 0 || p >= apps.size()) return;
+        int total = adapter != null ? adapter.getItemCount() : apps.size();
+        if (p < 0 || p >= total) return;
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(p);
         if (vh != null) {
             vh.itemView.requestFocus();
@@ -705,7 +1073,8 @@ public class LauncherActivity extends Activity {
         lastPos = pos;
         focusedTilePos = pos;
         prefs.edit().putInt("last", pos).apply();
-        AppEntry e = apps.get(pos);
+        AppEntry e = adapter.getAppForPosition(pos);
+        if (e == null) return;
 
         // Magnify neighbouring tiles in the dock
         animateDockNeighbours(pos);
@@ -832,6 +1201,9 @@ public class LauncherActivity extends Activity {
 
     // ------------------------------------------------------------ adapter
 
+    private static final int TYPE_TILE = 0;
+    private static final int TYPE_CATEGORY_BAR = 1;
+
     private static class TileHolder extends RecyclerView.ViewHolder {
         ImageView img;
         TextView label;
@@ -843,9 +1215,118 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private class TileAdapter extends RecyclerView.Adapter<TileHolder> {
+    private static class CategoryBarHolder extends RecyclerView.ViewHolder {
+        LinearLayout container;
+        TextView[] categoryPills;
+
+        CategoryBarHolder(View v, LinearLayout c, TextView[] p) {
+            super(v);
+            container = c;
+            categoryPills = p;
+        }
+    }
+
+    private class TileAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+
         @Override
-        public TileHolder onCreateViewHolder(ViewGroup parent, int type) {
+        public int getItemViewType(int position) {
+            return (position == dockApps.size()) ? TYPE_CATEGORY_BAR : TYPE_TILE;
+        }
+
+        private AppEntry getAppForPosition(int pos) {
+            if (pos < dockApps.size()) return dockApps.get(pos);
+            int libPos = pos - dockApps.size() - 1;
+            if (libPos >= 0 && libPos < displayedLibraryApps.size()) {
+                return displayedLibraryApps.get(libPos);
+            }
+            return null;
+        }
+
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int type) {
+            if (type == TYPE_CATEGORY_BAR) {
+                LinearLayout barLayout = new LinearLayout(LauncherActivity.this);
+                barLayout.setOrientation(LinearLayout.HORIZONTAL);
+                barLayout.setGravity(Gravity.CENTER_VERTICAL);
+                RecyclerView.LayoutParams rlp = new RecyclerView.LayoutParams(-1, px(54));
+                rlp.topMargin = px(28);
+                rlp.bottomMargin = px(12);
+                barLayout.setLayoutParams(rlp);
+
+                final String[] catNames = {"All Apps", "Recents", "Media & Video", "Music & Audio", "Tools", "Search 🔍"};
+                final TextView[] pillViews = new TextView[catNames.length];
+
+                for (int i = 0; i < catNames.length; i++) {
+                    final int catIdx = i;
+                    final TextView p = new TextView(LauncherActivity.this);
+                    style(p, 14, 400, Color.WHITE);
+                    p.setText(catNames[i]);
+                    p.setPadding(px(18), px(8), px(18), px(8));
+                    p.setGravity(Gravity.CENTER);
+                    p.setFocusable(true);
+                    p.setClickable(true);
+                    setCategoryPillStyle(p, selectedCategory == catIdx, false);
+
+                    LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, -2);
+                    if (i > 0) plp.leftMargin = px(10);
+                    p.setLayoutParams(plp);
+
+                    p.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                        @Override
+                        public void onFocusChange(View v, boolean has) {
+                            setCategoryPillStyle(p, selectedCategory == catIdx, has);
+                            if (has) {
+                                glass.animate().alpha(0f).setDuration(120).start();
+                                animateDockNeighbours(-1);
+                                hideAmbient();
+                            }
+                        }
+                    });
+
+                    p.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            if (catIdx == 5) {
+                                openSearchModal();
+                            } else {
+                                filterLibraryAppsByCategory(catIdx);
+                                notifyDataSetChanged();
+                                p.requestFocus();
+                            }
+                        }
+                    });
+
+                    p.setOnKeyListener(new View.OnKeyListener() {
+                        @Override
+                        public boolean onKey(View v, int code, KeyEvent ev) {
+                            if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
+                            switch (code) {
+                                case KeyEvent.KEYCODE_DPAD_LEFT:
+                                    if (catIdx > 0) pillViews[catIdx - 1].requestFocus();
+                                    return true;
+                                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                                    if (catIdx < catNames.length - 1) pillViews[catIdx + 1].requestFocus();
+                                    return true;
+                                case KeyEvent.KEYCODE_DPAD_UP:
+                                    focusPos(Math.min(lastPos, dockApps.size() - 1));
+                                    return true;
+                                case KeyEvent.KEYCODE_DPAD_DOWN:
+                                    if (!displayedLibraryApps.isEmpty()) {
+                                        focusPos(dockApps.size() + 1);
+                                    }
+                                    return true;
+                            }
+                            return false;
+                        }
+                    });
+
+                    pillViews[i] = p;
+                    barLayout.addView(p);
+                }
+
+                return new CategoryBarHolder(barLayout, barLayout, pillViews);
+            }
+
             LinearLayout tile = new LinearLayout(LauncherActivity.this);
             tile.setOrientation(LinearLayout.VERTICAL);
             tile.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -874,7 +1355,7 @@ public class LauncherActivity extends Activity {
                 public void onFocusChange(View v, boolean has) {
                     int pos = h.getBindingAdapterPosition();
                     if (pos < 0) return;
-                    h.label.setVisibility((has && pos >= dockApps.size()) ? View.VISIBLE : View.INVISIBLE);
+                    h.label.setVisibility((has && pos > dockApps.size()) ? View.VISIBLE : View.INVISIBLE);
                     if (has) onTileFocused(pos, h);
                     else if (!grid.hasFocus() && !pillHasFocus()) {
                         glass.animate().alpha(0f).setDuration(120).start();
@@ -886,9 +1367,11 @@ public class LauncherActivity extends Activity {
                 @Override
                 public void onClick(View v) {
                     int pos = h.getBindingAdapterPosition();
-                    if (pos < 0 || pos >= apps.size()) return;
+                    AppEntry entry = getAppForPosition(pos);
+                    if (entry == null) return;
                     try {
-                        startActivity(apps.get(pos).intent);
+                        recordAppLaunch(entry.pkg);
+                        startActivity(entry.intent);
                     } catch (Exception ignored) {
                     }
                 }
@@ -897,8 +1380,9 @@ public class LauncherActivity extends Activity {
                 @Override
                 public boolean onLongClick(View v) {
                     int pos = h.getBindingAdapterPosition();
-                    if (pos < 0 || pos >= apps.size()) return false;
-                    showAppManagementDialog(apps.get(pos), pos, pos < dockApps.size(), v);
+                    AppEntry entry = getAppForPosition(pos);
+                    if (entry == null) return false;
+                    showAppManagementDialog(entry, pos, pos < dockApps.size(), v);
                     return true;
                 }
             });
@@ -907,28 +1391,56 @@ public class LauncherActivity extends Activity {
                 public boolean onKey(View v, int code, KeyEvent ev) {
                     if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
                     int pos = h.getBindingAdapterPosition();
-                    int n = apps.size();
+                    int totalItems = getItemCount();
+                    AppEntry entry = getAppForPosition(pos);
+
                     if (code == KeyEvent.KEYCODE_MENU) {
-                        if (pos >= 0 && pos < n) {
-                            showAppManagementDialog(apps.get(pos), pos, pos < dockApps.size(), v);
+                        if (entry != null) {
+                            showAppManagementDialog(entry, pos, pos < dockApps.size(), v);
                             return true;
                         }
                     }
                     switch (code) {
                         case KeyEvent.KEYCODE_DPAD_LEFT:
-                            if (pos % cols != 0) focusPos(pos - 1);
+                            if (pos < dockApps.size()) {
+                                if (pos > 0) focusPos(pos - 1);
+                            } else {
+                                int offset = (pos - (dockApps.size() + 1));
+                                if (offset % cols != 0) focusPos(pos - 1);
+                            }
                             return true;
                         case KeyEvent.KEYCODE_DPAD_RIGHT:
-                            if (pos % cols != cols - 1 && pos < n - 1) focusPos(pos + 1);
+                            if (pos < dockApps.size()) {
+                                if (pos < dockApps.size() - 1) focusPos(pos + 1);
+                            } else {
+                                int offset = (pos - (dockApps.size() + 1));
+                                if (offset % cols != cols - 1 && pos < totalItems - 1) focusPos(pos + 1);
+                            }
                             return true;
                         case KeyEvent.KEYCODE_DPAD_UP:
-                            if (pos < cols) pills[0].requestFocus();
-                            else focusPos(pos - cols);
+                            if (pos < dockApps.size()) {
+                                pills[0].requestFocus();
+                            } else {
+                                int offset = (pos - (dockApps.size() + 1));
+                                if (offset < cols) {
+                                    focusCategoryBar();
+                                } else {
+                                    focusPos(pos - cols);
+                                }
+                            }
                             return true;
                         case KeyEvent.KEYCODE_DPAD_DOWN:
-                            int t = pos + cols;
-                            if (t >= n) t = (pos / cols < (n - 1) / cols) ? n - 1 : -1;
-                            if (t >= 0) focusPos(t);
+                            if (pos < dockApps.size()) {
+                                focusCategoryBar();
+                            } else {
+                                int t = pos + cols;
+                                if (t >= totalItems) {
+                                    int offset = pos - (dockApps.size() + 1);
+                                    int lastOffset = totalItems - 1 - (dockApps.size() + 1);
+                                    t = (offset / cols < lastOffset / cols) ? totalItems - 1 : -1;
+                                }
+                                if (t >= 0) focusPos(t);
+                            }
                             return true;
                     }
                     return false;
@@ -938,8 +1450,19 @@ public class LauncherActivity extends Activity {
         }
 
         @Override
-        public void onBindViewHolder(TileHolder h, int pos) {
-            AppEntry e = apps.get(pos);
+        public void onBindViewHolder(RecyclerView.ViewHolder holder, int pos) {
+            if (getItemViewType(pos) == TYPE_CATEGORY_BAR) {
+                CategoryBarHolder cbh = (CategoryBarHolder) holder;
+                for (int i = 0; i < cbh.categoryPills.length; i++) {
+                    setCategoryPillStyle(cbh.categoryPills[i], selectedCategory == i, cbh.categoryPills[i].hasFocus());
+                }
+                return;
+            }
+
+            TileHolder h = (TileHolder) holder;
+            AppEntry e = getAppForPosition(pos);
+            if (e == null) return;
+
             h.img.setImageDrawable(e.banner);
             h.img.setScaleX(1f);
             h.img.setScaleY(1f);
@@ -965,7 +1488,46 @@ public class LauncherActivity extends Activity {
 
         @Override
         public int getItemCount() {
-            return apps.size();
+            return dockApps.size() + 1 + displayedLibraryApps.size();
+        }
+    }
+
+    private void setCategoryPillStyle(TextView p, boolean isSelected, boolean isFocused) {
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(px(18));
+        if (isFocused) {
+            g.setColor(getColor(R.color.pill_focus_bg));
+            g.setStroke(px(2), getColor(R.color.pill_stroke_focus));
+        } else if (isSelected) {
+            g.setColor(getColor(R.color.category_pill_active));
+            g.setStroke(px(1), 0x55FFFFFF);
+        } else {
+            g.setColor(getColor(R.color.category_pill_inactive));
+            g.setStroke(px(1), 0x14FFFFFF);
+        }
+        p.setBackground(g);
+        p.animate().scaleX(isFocused ? 1.08f : 1f).scaleY(isFocused ? 1.08f : 1f).setDuration(160).start();
+    }
+
+    private void focusCategoryBar() {
+        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(dockApps.size());
+        if (vh instanceof CategoryBarHolder) {
+            CategoryBarHolder cbh = (CategoryBarHolder) vh;
+            int idx = Math.min(selectedCategory, cbh.categoryPills.length - 1);
+            cbh.categoryPills[idx].requestFocus();
+        } else {
+            grid.smoothScrollToPosition(dockApps.size());
+            grid.post(new Runnable() {
+                @Override
+                public void run() {
+                    RecyclerView.ViewHolder vh2 = grid.findViewHolderForAdapterPosition(dockApps.size());
+                    if (vh2 instanceof CategoryBarHolder) {
+                        CategoryBarHolder cbh = (CategoryBarHolder) vh2;
+                        int idx = Math.min(selectedCategory, cbh.categoryPills.length - 1);
+                        cbh.categoryPills[idx].requestFocus();
+                    }
+                }
+            });
         }
     }
 }

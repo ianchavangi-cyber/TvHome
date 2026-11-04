@@ -17,4 +17,9 @@
     <color name="glass_frame_stroke_inner">#88FFFFFF</color>
     <color name="card_icon_bg">#242832</color>
     <color name="card_icon_stroke">#26FFFFFF</color>
+    <color name="category_pill_active">#4DFFFFFF</color>
+    <color name="category_pill_inactive">#1AFFFFFF</color>
+    <color name="search_overlay_bg">#E60B0E14</color>
+    <color name="search_input_bg">#242832</color>
+    <color name="search_input_stroke">#33FFFFFF</color>
 </resources>
