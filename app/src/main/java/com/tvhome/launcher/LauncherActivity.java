@@ -27,6 +27,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -179,17 +180,21 @@ public class LauncherActivity extends Activity {
 
     private void buildUi() {
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.BLACK);
+        GradientDrawable bg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF0B0E14, 0xFF030407}
+        );
+        root.setBackground(bg);
         setContentView(root);
 
         // ambient glow (below everything else)
         glow = new View(this);
         glowDrawable = new GradientDrawable();
         glowDrawable.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-        glowDrawable.setGradientRadius(px(300));
-        glowDrawable.setColors(new int[]{0x55888888, 0x00000000});
+        glowDrawable.setGradientRadius(px(380));
+        glowDrawable.setColors(new int[]{0x55888888, 0x22888888, 0x00000000});
         glow.setBackground(glowDrawable);
-        FrameLayout.LayoutParams glp = new FrameLayout.LayoutParams(px(600), px(360));
+        FrameLayout.LayoutParams glp = new FrameLayout.LayoutParams(px(760), px(440));
         glow.setLayoutParams(glp);
         glow.setAlpha(0f);
         root.addView(glow);
@@ -247,15 +252,16 @@ public class LauncherActivity extends Activity {
         tlp.topMargin = px(28);
         tl.setLayoutParams(tlp);
         greeting = new TextView(this);
-        style(greeting, 18, 300, 0xBBFFFFFF);
+        style(greeting, 17, 350, 0xB3FFFFFF);
+        greeting.setLetterSpacing(0.04f);
         TextClock clock = new TextClock(this);
         clock.setFormat12Hour("h:mm");
         clock.setFormat24Hour("HH:mm");
-        style(clock, 72, 200, Color.WHITE);
+        style(clock, 74, 250, Color.WHITE);
         TextClock date = new TextClock(this);
         date.setFormat12Hour("EEEE, d MMMM");
         date.setFormat24Hour("EEEE, d MMMM");
-        style(date, 18, 300, 0xBBFFFFFF);
+        style(date, 17, 300, 0xB3FFFFFF);
         tl.addView(greeting);
         tl.addView(clock);
         tl.addView(date);
@@ -324,12 +330,12 @@ public class LauncherActivity extends Activity {
 
     private void setPillBg(TextView p, boolean focused) {
         GradientDrawable g = new GradientDrawable();
-        g.setCornerRadius(px(24));
-        g.setColor(focused ? 0x55FFFFFF : 0x22FFFFFF);
-        if (focused) g.setStroke(px(2), 0x88FFFFFF);
+        g.setCornerRadius(px(22));
+        g.setColor(focused ? 0x4DFFFFFF : 0x1EFFFFFF);
+        g.setStroke(focused ? px(2) : px(1), focused ? 0x88FFFFFF : 0x14FFFFFF);
         p.setBackground(g);
-        p.setScaleX(focused ? 1.06f : 1f);
-        p.setScaleY(focused ? 1.06f : 1f);
+        p.setScaleX(focused ? 1.08f : 1f);
+        p.setScaleY(focused ? 1.08f : 1f);
     }
 
     // --------------------------------------------------------------- pills
@@ -504,9 +510,16 @@ public class LauncherActivity extends Activity {
             int off = grid.computeVerticalScrollOffset();
             if (off > 0) grid.smoothScrollBy(0, -off);
             bigName.setText(e.label);
-            glowDrawable.setColors(new int[]{(e.color & 0x00FFFFFF) | 0x66000000, 0x00000000});
+            int baseColor = e.color & 0x00FFFFFF;
+            glowDrawable.setColors(new int[]{0x55000000 | baseColor, 0x22000000 | baseColor, 0x00000000});
             float cx = margin + (pos % cols) * tileW + tileW / 2f;
-            glow.animate().x(cx - px(300)).y(padTop - px(250)).alpha(1f).setDuration(220).start();
+            glow.animate()
+                    .x(cx - px(380))
+                    .y(padTop - px(290))
+                    .alpha(1f)
+                    .setDuration(280)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
             bigName.animate().alpha(1f).setDuration(180).start();
         } else {
             hideAmbient();
@@ -552,10 +565,14 @@ public class LauncherActivity extends Activity {
     // ---------------------------------------------------------- dock band
 
     private class DockBand extends RecyclerView.ItemDecoration {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         DockBand() {
-            paint.setColor(0xFF161618);
+            fillPaint.setColor(0xFF1A1D24);
+            strokePaint.setStyle(Paint.Style.STROKE);
+            strokePaint.setStrokeWidth(px(1));
+            strokePaint.setColor(0x26FFFFFF);
         }
 
         @Override
@@ -570,7 +587,8 @@ public class LauncherActivity extends Activity {
             }
             if (top == Integer.MAX_VALUE) return;
             RectF r = new RectF(margin - px(12), top - px(6), W - margin + px(12), bottom + px(2));
-            c.drawRoundRect(r, px(28), px(28), paint);
+            c.drawRoundRect(r, px(28), px(28), fillPaint);
+            c.drawRoundRect(r, px(28), px(28), strokePaint);
         }
     }
 
